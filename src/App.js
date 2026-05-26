@@ -51,6 +51,15 @@ const MapIcon = () => (
     <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>
   </svg>
 )
+const SheetIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+    <polyline points="14 2 14 8 20 8"></polyline>
+    <line x1="16" y1="13" x2="8" y2="13"></line>
+    <line x1="16" y1="17" x2="8" y2="17"></line>
+    <polyline points="10 9 9 9 8 9"></polyline>
+  </svg>
+)
 const GridIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
@@ -366,6 +375,9 @@ export default function App() {
   const [editing, setEditing] = useState(null)
   const [surprise, setSurprise] = useState(null)
 
+  const [showImport, setShowImport] = useState(false)
+  const [importText, setImportText] = useState('')
+  
   // ── Load data ──────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     try {
@@ -444,6 +456,58 @@ export default function App() {
     else setShowPin(true)
   }
 
+  const handleSheetImport = async () => {
+    // 1. Split the raw pasted string into individual lines
+    const rows = importText.trim().split('\n')
+    let count = 0
+
+    // 2. Loop through every row extracted from the spreadsheet
+    for (const row of rows) {
+      // Google Sheets uses Tab characters (\t) to separate cell columns when copied
+      const cols = row.split('\t')
+      
+      // Skip rows that don't have enough data points (minimal column requirement)
+      if (cols.length < 5) continue 
+
+      // 3. Map array positions directly to explicit data fields
+      const [name, cuisine, location, address, status, date_visited, rating_a, rating_b, note] = cols
+
+      // 4. Sanitize the status column to match database RLS check constraints safely
+      const parsedStatus = status?.toLowerCase().includes('visit') ? 'visited' : 'want-to-go'
+
+      // 5. Structure the individual restaurant data payload
+      const restaurantData = {
+        name: name?.trim(),
+        cuisine: cuisine?.trim() || 'Other',
+        location: location?.trim() || '',
+        address: address?.trim() || '',
+        status: parsedStatus,
+        date_visited: date_visited?.trim() || null,
+        rating_a: parseInt(rating_a) || 0,
+        rating_b: parseInt(rating_b) || 0,
+        note: note?.trim() || '',
+        lat: null, // Left empty to let the user manually hit geocode pins later
+        lng: null
+      }
+
+      // 6. Push verified payloads up to your Supabase Client API
+      if (restaurantData.name) {
+        try {
+          await addRestaurant(restaurantData)
+          count++
+        } catch (err) {
+          console.error("Failed to insert row:", restaurantData.name, err)
+        }
+      }
+    }
+
+    // 7. Success notifications and layout cleanups
+    alert(`Successfully imported ${count} restaurants!`)
+    setShowImport(false)
+    setImportText('')
+    load() // Re-fetch data from backend to show new cards immediately
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────
   if (loading) return (
     <div style={{ minHeight:'100vh', background:'#faf7f4', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:12 }}>
@@ -487,6 +551,13 @@ export default function App() {
           <button onClick={handleSurprise} style={{ ...s.btn, background:'#f0ebe6', color:'#5a4a40', display:'flex', alignItems:'center', gap:'6px', fontSize:'13px', padding:'9px 14px' }}>
             <DiceIcon/> Surprise Me
           </button>
+
+          {canEdit && (
+            <button onClick={() => setShowImport(true)} style={{ ...s.btn, background:'#ede8e3', color:'#5a4a40', display:'flex', alignItems:'center', gap:'6px', fontSize:'13px', padding:'9px 14px' }}>
+              <SheetIcon/> Import from Sheets
+            </button>
+          )}
+              
           <button onClick={handleAddClick} style={{ ...s.btn, background:'#c4704a', color:'white', display:'flex', alignItems:'center', gap:'6px', fontSize:'13px', padding:'9px 14px' }}>
             <PlusIcon/> Add
           </button>
@@ -544,6 +615,40 @@ export default function App() {
 
       {/* ── Modals ── */}
       {showPin && <PinModal onSuccess={()=>{ setCanEdit(true); setShowPin(false) }} onClose={()=>setShowPin(false)}/>}
+
+      {showImport && canEdit && (
+        <Modal onClose={() => { setShowImport(false); setImportText(''); }}>
+          <div style={{ textAlign: 'left' }}>
+            <h2 style={{ fontFamily: "'Playfair Display',Georgia,serif", fontSize: '22px', color: '#2d1f16', marginBottom: '8px', fontWeight: 600 }}>
+              Import from Google Sheets
+            </h2>
+            <p style={{ fontSize: '13px', color: '#9a8f85', marginBottom: '16px', lineHeight: 1.4 }}>
+              Make sure your spreadsheet columns are organized in this exact sequence:<br />
+              <strong style={{ color: '#c4704a' }}>Name | Cuisine | Location | Address | Status | Date | My Rating | Partner Rating | Note</strong>
+            </p>
+            
+            <textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder="Select your cell rows inside Google Sheets, copy them (Ctrl+C), and paste them directly into this block..."
+              style={{ ...s.input, height: '160px', resize: 'none', marginBottom: '20px', fontSize: '13px', lineHeight: 1.5 }}
+            />
+            
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => { setShowImport(false); setImportText(''); }} style={{ ...s.btn, background: '#ede8e3', color: '#5a4a40', flex: 1 }}>
+                Cancel
+              </button>
+              <button 
+                onClick={handleSheetImport} 
+                disabled={!importText.trim()} 
+                style={{ ...s.btn, background: '#c4704a', color: 'white', flex: 2, opacity: importText.trim() ? 1 : 0.5 }}
+              >
+                Upload and Sync Rows
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {surprise && (
         <Modal onClose={()=>setSurprise(null)}>
